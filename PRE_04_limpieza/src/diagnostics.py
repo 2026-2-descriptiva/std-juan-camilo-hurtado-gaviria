@@ -5,7 +5,12 @@ OUTPUT_FILE = "PRE_04_limpieza/submission/ventas.csv"
 
 def main():
     df = pd.read_csv(OUTPUT_FILE)
-    series = df["supplier"]
+
+    series = df["amount"]
+
+    # series = series.astype(str)
+    # series = series[series.str.startswith("$")]
+
     series = series.sort_values()
     series = series.drop_duplicates()
 
@@ -15,5 +20,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
     
