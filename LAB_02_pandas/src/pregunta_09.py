@@ -1,3 +1,5 @@
+import pandas as pd
+from pathlib import Path
 def pregunta_09():
     """
     Retorne la tabla `data/tbl0.tsv` completa con una columna adicional
@@ -13,4 +15,7 @@ def pregunta_09():
         ...
     """
 
-    raise NotImplementedError
+    INPUT_FILE=Path(__file__).resolve().parents[1] / "data" / "tbl0.tsv"
+    df = pd.read_csv(INPUT_FILE, sep="\t")
+    df['year'] = df['c3'].str[:4]
+    return df
