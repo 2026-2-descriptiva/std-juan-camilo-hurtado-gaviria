@@ -1,3 +1,8 @@
+import json
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
 def pregunta_01():
     """
     Una aseguradora quiere publicar datos de sus afiliados para que un grupo
@@ -79,5 +84,100 @@ def pregunta_01():
           ...
         }
     """
+    activity_dir = Path(__file__).resolve().parent.parent
+    data_file = activity_dir / "data" / "insurance.csv.gz"
+    output_report = activity_dir / "submission" / "privacy_report.json"
+    output_csv = activity_dir / "submission" / "insurance_published.csv"
 
-    raise NotImplementedError
+    K = 5
+
+    df = pd.read_csv(data_file, compression="gzip")
+
+    # ---------- Riesgo con los cuasi-identificadores originales ----------
+    original_qi = ["age", "sex", "bmi", "children", "region"]
+    original_sizes = df.groupby(original_qi)["smoker"].transform("size")
+    original_k = int(original_sizes.min())
+    original_unique_records = int((original_sizes == 1).sum())
+
+    # ---------- Generalización (pd.cut con right=False, como en el notebook) ----------
+    df["age_group"] = pd.cut(
+        df["age"],
+        bins=[18, 30, 40, 50, 65],
+        labels=["18-29", "30-39", "40-49", "50-64"],
+        right=False,
+    ).astype(str)
+
+    df["bmi_group"] = pd.cut(
+        df["bmi"],
+        bins=[-np.inf, 18.5, 25, 30, np.inf],
+        labels=["bajo peso", "normal", "sobrepeso", "obesidad"],
+        right=False,
+    ).astype(str)
+
+    df["children_group"] = pd.cut(
+        df["children"],
+        bins=[-np.inf, 1, 3, np.inf],
+        labels=["0", "1-2", "3+"],
+        right=False,
+    ).astype(str)
+
+    schemes_qi = {
+        "with_children": ["age_group", "sex", "bmi_group", "children_group", "region"],
+        "without_children": ["age_group", "sex", "bmi_group", "region"],
+    }
+
+    schemes = {}
+    published_by_scheme = {}
+    is_smoker = (df["smoker"] == "yes").astype(int)
+
+    for name, qi in schemes_qi.items():
+        class_size = df.groupby(qi)["smoker"].transform("size")
+        keep = class_size >= K
+        published = df[keep]
+
+        # Diversidad del atributo sensible entre las clases publicadas
+        by_class = (
+            is_smoker[keep]
+            .groupby([published[c] for c in qi])
+            .agg(["mean", "size"])
+        )
+        no_diversity = by_class[(by_class["mean"] == 0) | (by_class["mean"] == 1)]
+
+        schemes[name] = {
+            "quasi_identifiers": qi,
+            "equivalence_classes": int(df.groupby(qi).ngroups),
+            "k_before_suppression": int(class_size.min()),
+            "suppressed_records": int((~keep).sum()),
+            "published_records": int(keep.sum()),
+            "published_classes": int(len(by_class)),
+            "classes_without_smoker_diversity": int(len(no_diversity)),
+            "records_without_smoker_diversity": int(no_diversity["size"].sum()),
+        }
+        published_by_scheme[name] = published
+
+    # ---------- Esquema seleccionado: el que menos registros suprime ----------
+    selected_scheme = min(schemes, key=lambda s: schemes[s]["suppressed_records"])
+    published = published_by_scheme[selected_scheme]
+
+    report = {
+        "original_k": original_k,
+        "original_unique_records": original_unique_records,
+        "schemes": schemes,
+        "selected_scheme": selected_scheme,
+        "mean_charges_original": float(df["charges"].mean()),
+        "mean_charges_published": float(published["charges"].mean()),
+        "smoker_rate_original": float((df["smoker"] == "yes").mean()),
+        "smoker_rate_published": float((published["smoker"] == "yes").mean()),
+    }
+
+    # ---------- Guardar ----------
+    output_report.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_report, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    columns = schemes_qi[selected_scheme] + ["smoker", "charges"]
+    published[columns].to_csv(output_csv, index=False)
+
+    return report
+
+  
