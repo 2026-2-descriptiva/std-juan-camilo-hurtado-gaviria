@@ -1,3 +1,6 @@
+import pandas as pd
+from pathlib import Path
+
 def pregunta_01():
     """
     Las frases de este laboratorio no están en una tabla, sino en miles de
@@ -25,5 +28,37 @@ def pregunta_01():
         "Cardona slowed her vehicle , turned around ...",neutral
         ...
     """
+    
+    activity_dir = Path(__file__).resolve().parent.parent
+    train_dir = activity_dir / "data" / "train"
+    test_dir = activity_dir / "data" / "test"
+    submission_dir = activity_dir / "submission"
+    submission_dir.mkdir(parents=True, exist_ok=True)
 
-    raise NotImplementedError
+    # Crear listas para almacenar las frases y sus etiquetas
+    train_data = []
+    test_data = []
+
+    # Función para procesar un directorio y extraer frases y etiquetas
+    def process_directory(directory, data_list):
+        for sentiment_dir in sorted(directory.iterdir()):
+            if sentiment_dir.is_dir():
+                sentiment = sentiment_dir.name
+                for txt_file in sorted(sentiment_dir.glob("*.txt")):
+                    with open(txt_file, "r", encoding="utf-8") as file:
+                        phrase = file.read().strip()
+                        data_list.append({"phrase": phrase, "target": sentiment})
+
+    # Procesar los directorios de entrenamiento y prueba
+    process_directory(train_dir, train_data)
+    process_directory(test_dir, test_data)
+
+    # Crear DataFrames a partir de las listas de datos
+    train_df = pd.DataFrame(train_data)
+    test_df = pd.DataFrame(test_data)
+
+    # Guardar los DataFrames en archivos CSV sin índice
+    train_df.to_csv(submission_dir / "train_dataset.csv", index=False)
+    test_df.to_csv(submission_dir / "test_dataset.csv", index=False)
+
+    
