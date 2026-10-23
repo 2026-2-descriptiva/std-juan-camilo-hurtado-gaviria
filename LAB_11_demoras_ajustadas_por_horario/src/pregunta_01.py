@@ -1,5 +1,5 @@
 import pandas as pd
-
+from pathlib import Path
 
 def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -58,4 +58,65 @@ def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame]:
         ...
     """
 
-    raise NotImplementedError
+    activity_dir = Path(__file__).resolve().parent.parent
+    data_file = activity_dir / "data" / "flights_by_carrier_day_hour.csv.gz"
+    output_file0 = activity_dir / "submission" / "hourly_delay_rates.csv"
+    output_file1 = activity_dir / "submission" / "carrier_adjusted_delays.csv"
+    submission_dir = activity_dir / "submission"
+    submission_dir.mkdir(parents=True, exist_ok=True) 
+
+    df = pd.read_csv(data_file, compression="gzip", sep=",")
+
+    hourly_agg = df.groupby("scheduled_departure_hour", as_index=False).agg({
+        "operated_flights": "sum",
+        "delayed_departure_15_flights": "sum"
+    })
+
+    all_hours = pd.DataFrame({"scheduled_departure_hour": range(24)})
+    hourly_agg = pd.merge(all_hours, hourly_agg, on="scheduled_departure_hour", how="left").fillna(0)
+
+    hourly_agg["delay_rate"] = hourly_agg["delayed_departure_15_flights"] / hourly_agg["operated_flights"]
+    hourly_agg["delay_rate"] = hourly_agg["delay_rate"].fillna(0)
+    hourly_agg = hourly_agg.sort_values("scheduled_departure_hour").reset_index(drop=True)
+
+    national_rates = hourly_agg.set_index("scheduled_departure_hour")["delay_rate"].to_dict()
+    df["national_delay_rate"] = df["scheduled_departure_hour"].map(national_rates)
+    df["expected_delayed_for_row"] = df["operated_flights"] * df["national_delay_rate"]
+
+    carrier_agg = df.groupby("reporting_airline", as_index=False).agg({
+        "operated_flights": "sum",
+        "delayed_departure_15_flights": "sum",
+        "expected_delayed_for_row": "sum"
+    })
+    carrier_agg = carrier_agg.rename(columns={"expected_delayed_for_row": "expected_delayed_flights"})
+
+    carrier_agg["delay_rate"] = carrier_agg["delayed_departure_15_flights"] / carrier_agg["operated_flights"]
+    carrier_agg["observed_to_expected_ratio"] = carrier_agg["delayed_departure_15_flights"] / carrier_agg["expected_delayed_flights"]
+
+    carrier_agg = carrier_agg[carrier_agg["operated_flights"] >= 100000].copy()
+
+    
+    carrier_agg["crude_rank"] = carrier_agg["delay_rate"].rank(ascending=False, method="min").astype(int)
+    carrier_agg["adjusted_rank"] = carrier_agg["observed_to_expected_ratio"].rank(ascending=False, method="min").astype(int)
+
+    
+    carrier_agg = carrier_agg.sort_values("adjusted_rank").reset_index(drop=True)
+
+    carrier_agg = carrier_agg[[
+        "reporting_airline",
+        "operated_flights",
+        "delayed_departure_15_flights",
+        "delay_rate",
+        "expected_delayed_flights",
+        "observed_to_expected_ratio",
+        "crude_rank",
+        "adjusted_rank"
+    ]]
+
+    # Guardar los archivos CSV sin índice
+    hourly_agg.to_csv(output_file0, index=False)
+    carrier_agg.to_csv(output_file1, index=False)
+
+    return hourly_agg, carrier_agg
+
+

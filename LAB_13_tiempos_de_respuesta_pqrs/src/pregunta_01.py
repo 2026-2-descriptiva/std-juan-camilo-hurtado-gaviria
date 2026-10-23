@@ -1,4 +1,5 @@
 import pandas as pd
+from pathlib import Path
 
 
 def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -61,4 +62,103 @@ def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         ...
     """
 
-    raise NotImplementedError
+    activity_dir = Path(__file__).resolve().parent.parent
+    data_file0 = activity_dir / "data" / "historical_requests_letter.csv.gz"
+    data_file1 = activity_dir / "data" / "historical_requests_web.csv.gz"
+    submission_dir = activity_dir / "submission"
+    submission_dir.mkdir(parents=True, exist_ok=True)
+    
+    output_file0 = submission_dir / "channel_summary.csv"
+    output_file1 = submission_dir / "yearly_summary.csv"
+    output_file2 = submission_dir / "entry_day_summary.csv"
+
+    df_letter = pd.read_csv(data_file0, parse_dates=["in_date", "out_date"])
+    df_letter["channel"] = "letter"
+    df_web = pd.read_csv(data_file1, parse_dates=["in_date", "out_date"])
+    df_web["channel"] = "web"
+
+    df_letter = df_letter.drop_duplicates()
+    df_web = df_web.drop_duplicates()
+
+    df = pd.concat([df_letter, df_web], ignore_index=True)
+
+    df["calendar_days"] = (df["out_date"] - df["in_date"]).dt.days
+
+    def compute_business_days(row):
+        if pd.isna(row["out_date"]):
+            return pd.NA
+        return int(pd.bdate_range(start=row["in_date"] + pd.Timedelta(days=1), end=row["out_date"]).size)
+
+    df["business_days"] = df.apply(compute_business_days, axis=1)
+
+    df["answered"] = df["out_date"].notna()
+    df["pending"] = df["out_date"].isna()
+    df["on_time"] = df["answered"] & (df["business_days"] <= 15)
+
+    df["year"] = df["in_date"].dt.year
+
+    channel_groups = df.groupby("channel")
+    channel_rows = []
+    for channel, sub in channel_groups:
+        requests = len(sub)
+        answered = int(sub["answered"].sum())
+        pending = int(sub["pending"].sum())
+        median_business_days = float(sub.loc[sub["answered"], "business_days"].median()) if answered > 0 else 0.0
+        on_time_rate = float(sub["on_time"].sum() / requests) if requests > 0 else 0.0
+
+        channel_rows.append({
+            "channel": channel,
+            "requests": requests,
+            "answered": answered,
+            "pending": pending,
+            "median_business_days": median_business_days,
+            "on_time_rate": on_time_rate
+        })
+
+    df_channel = pd.DataFrame(channel_rows).sort_values("channel").reset_index(drop=True)
+    df_channel.to_csv(output_file0, index=False)
+
+    yearly_groups = df.groupby(["year", "channel"])
+    yearly_rows = []
+    for (year, channel), sub in yearly_groups:
+        requests = len(sub)
+        pending = int(sub["pending"].sum())
+        on_time_rate = float(sub["on_time"].sum() / requests) if requests > 0 else 0.0
+
+        yearly_rows.append({
+            "year": year,
+            "channel": channel,
+            "requests": requests,
+            "pending": pending,
+            "on_time_rate": on_time_rate
+        })
+
+    df_yearly = pd.DataFrame(yearly_rows).sort_values(["year", "channel"]).reset_index(drop=True)
+    df_yearly.to_csv(output_file1, index=False)
+
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_groups = df.groupby("day_name")
+    
+    day_rows = []
+    for day in day_order:
+        if day in df["day_name"].values:
+            sub = day_groups.get_group(day)
+            requests = len(sub)
+            median_calendar_days = float(sub.loc[sub["answered"], "calendar_days"].median()) if sub["answered"].sum() > 0 else 0.0
+            median_business_days = float(sub.loc[sub["answered"], "business_days"].median()) if sub["answered"].sum() > 0 else 0.0
+        else:
+            requests = 0
+            median_calendar_days = 0.0
+            median_business_days = 0.0
+
+        day_rows.append({
+            "day_name": day,
+            "requests": requests,
+            "median_calendar_days": median_calendar_days,
+            "median_business_days": median_business_days
+        })
+
+    df_entry_day = pd.DataFrame(day_rows)
+    df_entry_day.to_csv(output_file2, index=False)
+
+    return df_channel, df_yearly, df_entry_day
